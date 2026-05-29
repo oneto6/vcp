@@ -1,12 +1,26 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:go_router/go_router.dart';
+import 'package:http/browser_client.dart';
 import 'dart:convert';
+import 'dart:html' as html;
 import 'dart:math';
-import 'package:http/http.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
+import 'package:jwt_decoder/jwt_decoder.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:url_launcher/url_launcher_string.dart'; // 💡 Add this import
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  usePathUrlStrategy();
   runApp(const MyApp());
 }
 
+const apiServiceBaseURL =
+    "https://workplace-anatomy-speaker-merry.trycloudflare.com";
 const borderRadius = Radius.circular(8.0);
 const maxCrossAxisExtent = 200.0;
 
@@ -24,15 +38,48 @@ extension ListExtension<T> on List<T> {
   }
 }
 
-class MyApp extends StatelessWidget {
+final router = GoRouter(
+  routes: [
+    GoRoute(path: "/", builder: (context, state) => const MyHomePage()),
+    GoRoute(
+      path: "/auth/google",
+      builder: (context, state) => const AuthHandleGoogle(),
+    ),
+    GoRoute(path: "/login", builder: (context, state) => const Login()),
+  ],
+);
+
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
-  // This widget is the root of your application.
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  void init() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    final authString = prefs.getString("authorization");
+    if (authString == null) {
+      return;
+    }
+    ApiService.initialize(authString);
+    // final jwtMap = JwtDecoder.decode(authString);
+    // jwtMap[]
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    init();
+  }
+
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
+    return MaterialApp.router(
+      routerConfig: router,
       title: 'Flutter Demo',
       theme: ThemeData(colorScheme: .fromSeed(seedColor: Colors.deepPurple)),
-      home: const MyHomePage(),
     );
   }
 }
@@ -94,7 +141,12 @@ class _MyHomePageState extends State<MyHomePage> {
   AsyncValue<List<Meet>> state = Loading();
   Future<void> loadMeet() async {
     try {
-      final res = await get(Uri.parse('http://localhost:0437/meet'));
+      final client = BrowserClient()..withCredentials = true;
+
+      final res = await client.get(
+        Uri.parse('https://$apiServiceBaseURL/api/meet'),
+      );
+      // final res = await get(Uri.parse('https://$apiServiceBaseURL/meet'), headers: );
       if (res.statusCode != 200) {
         state = Error("res.statusCode != 200");
         return;
@@ -119,7 +171,6 @@ class _MyHomePageState extends State<MyHomePage> {
       }
       state = Data(list);
     } catch (e) {
-      print(e);
       state = Error('error paring');
     }
   }
@@ -138,7 +189,7 @@ class _MyHomePageState extends State<MyHomePage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         double horizontalPadding = max(
-          constraints.maxWidth - actionSpaceWidth,
+          (constraints.maxWidth - actionSpaceWidth) / 2,
           8,
         );
         return Scaffold(
@@ -146,7 +197,9 @@ class _MyHomePageState extends State<MyHomePage> {
           body: switch (state) {
             Data(:final data) => CustomScrollView(
               slivers: [
-                SliverAppBar(leading: Text("VCP")),
+                SliverAppBar(leading: Text("VCP"), actions: [
+                  ],
+                ),
                 SliverPadding(
                   padding: .symmetric(
                     horizontal: horizontalPadding,
@@ -294,4 +347,115 @@ class MeetCard extends StatelessWidget {
       ),
     ),
   );
+}
+
+class AuthHandleGoogle extends StatefulWidget {
+  const AuthHandleGoogle({super.key});
+
+  @override
+  State<AuthHandleGoogle> createState() => _AuthHandleGoogleState();
+}
+
+class _AuthHandleGoogleState extends State<AuthHandleGoogle> {
+  @override
+  void initState() {
+    super.initState();
+
+    if (!kIsWeb) return;
+
+    final cookies = html.document.cookie;
+
+    if (cookies == null) return;
+
+    const prefix = "authorization=";
+
+    for (final item in cookies.split(";")) {
+      final cookie = item.trim();
+
+      if (!cookie.startsWith(prefix)) continue;
+
+      final cookieValue = cookie.substring(prefix.length);
+
+      ApiService.initialize(cookieValue);
+
+      _persistAndMove(cookieValue);
+
+      break;
+    }
+  }
+
+  Future<void> _persistAndMove(String auth) async {
+    final prefs = await SharedPreferences.getInstance();
+
+    await prefs.setString("authorization", auth);
+
+    if (!mounted) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+
+      moveToHome(null);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: SizedBox.square(
+          dimension: 100,
+          child: CircularProgressIndicator(),
+        ),
+      ),
+    );
+  }
+
+  void moveToHome(_) {
+    context.go('/login');
+  }
+}
+
+class Login extends StatefulWidget {
+  const Login({super.key});
+
+  @override
+  State<Login> createState() => _LoginState();
+}
+
+class _LoginState extends State<Login> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: FilledButton(
+        onPressed: () {
+          launchUrl(
+            Uri.parse("$apiServiceBaseURL/api/auth/google"),
+            webOnlyWindowName: "_self",
+          );
+        },
+        child: Text("Sign in With Google"),
+      ),
+    );
+  }
+}
+
+class ApiService {
+  final String auth;
+  const ApiService(this.auth);
+
+  static ApiService? __initial;
+
+  static ApiService initialize(String auth) {
+    final init = ApiService(auth);
+    __initial = init;
+    return init;
+  }
+
+  factory ApiService.instance() {
+    final init = ApiService.__initial;
+    if (init == null) {
+      throw Exception("ApiService.instance() called before initialization");
+    }
+    return init;
+  }
 }
