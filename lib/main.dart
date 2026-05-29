@@ -1,22 +1,29 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
+import 'package:jwt_decoder/jwt_decoder.dart';
+import 'package:vcp/authorization.dart';
 import 'package:http/browser_client.dart';
 import 'dart:convert';
 import 'dart:html' as html;
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
-import 'package:jwt_decoder/jwt_decoder.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:url_launcher/url_launcher_string.dart'; // 💡 Add this import
+import 'package:vcp/auth/auth.dart';
+import 'package:vcp/router/router_bloc.dart';
+import 'package:vcp/router/router_state.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   usePathUrlStrategy();
-  runApp(const MyApp());
+  runApp(
+    MultiBlocProvider(
+      providers: [BlocProvider<AuthBloc>(create: (_) => AuthBloc())],
+      child: const MyApp(),
+    ),
+  );
 }
 
 const apiServiceBaseURL =
@@ -38,17 +45,6 @@ extension ListExtension<T> on List<T> {
   }
 }
 
-final router = GoRouter(
-  routes: [
-    GoRoute(path: "/", builder: (context, state) => const MyHomePage()),
-    GoRoute(
-      path: "/auth/google",
-      builder: (context, state) => const AuthHandleGoogle(),
-    ),
-    GoRoute(path: "/login", builder: (context, state) => const Login()),
-  ],
-);
-
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
@@ -57,29 +53,24 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  void init() async {
-    SharedPreferences prefs = await SharedPreferences.getInstance();
-    final authString = prefs.getString("authorization");
-    if (authString == null) {
-      return;
-    }
-    ApiService.initialize(authString);
-    // final jwtMap = JwtDecoder.decode(authString);
-    // jwtMap[]
-  }
-
   @override
   void initState() {
     super.initState();
-    init();
   }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp.router(
-      routerConfig: router,
-      title: 'Flutter Demo',
-      theme: ThemeData(colorScheme: .fromSeed(seedColor: Colors.deepPurple)),
+    return BlocBuilder(
+      bloc: RouterCubit(context.read()),
+      builder: (context, GoRouter state) {
+        return MaterialApp.router(
+          routerConfig: state,
+          title: 'Flutter Demo',
+          theme: ThemeData(
+            colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+          ),
+        );
+      },
     );
   }
 }
@@ -439,23 +430,31 @@ class _LoginState extends State<Login> {
   }
 }
 
-class ApiService {
-  final String auth;
-  const ApiService(this.auth);
+class GettingStarted extends StatefulWidget {
+  const GettingStarted({super.key});
 
-  static ApiService? __initial;
+  @override
+  State<GettingStarted> createState() => _GettingStartedState();
+}
 
-  static ApiService initialize(String auth) {
-    final init = ApiService(auth);
-    __initial = init;
-    return init;
-  }
-
-  factory ApiService.instance() {
-    final init = ApiService.__initial;
-    if (init == null) {
-      throw Exception("ApiService.instance() called before initialization");
-    }
-    return init;
+class _GettingStartedState extends State<GettingStarted> {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("Getting Started"),
+        actions: [
+          FilledButton(
+            onPressed: () {
+              launchUrl(
+                Uri.parse("$apiServiceBaseURL/api/auth/google"),
+                webOnlyWindowName: "_self",
+              );
+            },
+            child: Text("Sign in With Google"),
+          ),
+        ],
+      ),
+    );
   }
 }
